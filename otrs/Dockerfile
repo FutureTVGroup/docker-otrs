@@ -14,7 +14,7 @@ ENV LANGUAGE=en_US.UTF-8
 RUN yum install -y yum-plugin-fastestmirror && \
     yum install -y epel-release && \
     yum update -y && \
-    yum -y install bzip2 cronie httpd mysql mod_perl \
+    yum -y install bzip2 cronie httpd mysql mod_perl spamassassin \
     perl-core "perl(Crypt::SSLeay)" "perl(Net::LDAP)" "perl(URI)" \
     procmail "perl(Date::Format)" "perl(LWP::UserAgent)" \
     "perl(Net::DNS)" "perl(IO::Socket::SSL)" "perl(XML::Parser)" \
@@ -39,7 +39,7 @@ RUN chmod 755 /*.sh  && \
     sed -i -e "s/^nodaemon=false/nodaemon=true/" /etc/supervisord.conf && \
     cat /etc/supervisord.d/otrs.ini >> etc/supervisord.conf && \
     sed -i -e '/<ValidateModule>Kernel::System::SysConfig::StateValidate<\/ValidateModule>/ s/^#*/#/' \
-        ${OTRS_ROOT}Kernel/Config/Files/XML/Ticket.xml  && \
+    ${OTRS_ROOT}Kernel/Config/Files/XML/Ticket.xml  && \
     mkdir -p ${OTRS_ROOT}var/{run,tmp}/ && \
     perl -cw ${OTRS_ROOT}bin/cgi-bin/index.pl && \
     perl -cw ${OTRS_ROOT}bin/cgi-bin/customer.pl && \
