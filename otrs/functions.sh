@@ -225,6 +225,8 @@ function setup_otrs_config() {
   add_config_value "SecureMode" "1"
   # Configure automatic backups
   setup_backup_cron
+  # Configure spamassassin update cron
+  setup_sa_update_cron
 }
 
 function load_defaults() {
@@ -470,5 +472,17 @@ function setup_backup_cron() {
   elif [ "${OTRS_BACKUP_TIME}" == "disable" ]; then
     print_warning "Disabling automated backups !!"
     rm /etc/cron.d/otrs_backup
+  fi
+}
+
+function setup_sa_update_cron() {
+  if [ ! -z "${OTRS_SA_UPDATE_TIME}" ]; then
+    # Remove string quotes
+    OTRS_SA_UPDATE_TIME="${OTRS_SA_UPDATE_TIME%\"}"
+    OTRS_SA_UPDATE_TIME="${OTRS_SA_UPDATE_TIME#\"}"
+
+    # Set cron entry
+    print_info "Setting spamassassin update time to: ${OTRS_SA_UPDATE_TIME}"
+    echo "${OTRS_SA_UPDATE_TIME} root sa-update" > /etc/cron.d/sa_update
   fi
 }
