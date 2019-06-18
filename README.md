@@ -22,25 +22,29 @@ _If you want to follow the development of this project check out [my blog](http:
 Table of Contents
 =================
 
-* [Build Instructions](#build-instructions)
-* [How To Run It](#how-to-run-it)
-   * [Docker Secrets](#docker-secrets)
-   * [Notes](#notes)
-* [Administration Interface](#administration-interface)
-* [Customer Interface](#customer-interface)
-* [Installing Modules](#installing-modules)
-* [Changing Default Skins](#changing-default-skins)
-   * [Custom skin](#custom-skin)
-* [Backups &amp; Restore Procedures](#backups--restore-procedures)
-   * [Backup](#backup)
-   * [Restore](#restore)
-* [Upgrading](#upgrading)
-   * [Minor Version](#minor-version)
-   * [Major Version - EXPERIMENTAL !!!](#major-version---experimental-)
-      * [Modules (Add-ons)](#modules-add-ons)
-      * [Custom Skins &amp; Configuration Files](#custom-skins--configuration-files)
-      * [Troubleshooting](#troubleshooting)
-* [Enabling debug mode](#enabling-debug-mode)
+   * [OTRS 6 Ticketing System](#otrs-6-ticketing-system)
+   * [Table of Contents](#table-of-contents)
+      * [Build Instructions](#build-instructions)
+      * [How To Run It](#how-to-run-it)
+         * [Docker Secrets](#docker-secrets)
+         * [Notes](#notes)
+      * [Administration Interface](#administration-interface)
+      * [Customer Interface](#customer-interface)
+      * [Installing Addons](#installing-addons)
+      * [Changing Default Skins](#changing-default-skins)
+         * [Custom skin](#custom-skin)
+      * [Backups &amp; Restore Procedures](#backups--restore-procedures)
+         * [Backup](#backup)
+         * [Restore](#restore)
+      * [Upgrading](#upgrading)
+         * [Minor Version](#minor-version)
+         * [Major Version - EXPERIMENTAL !!!](#major-version---experimental-)
+            * [Aditional SQL files](#aditional-sql-files)
+            * [XML Configuration Files](#xml-configuration-files)
+            * [Add-ons](#add-ons)
+            * [Custom Skins &amp; Configuration Files](#custom-skins--configuration-files)
+            * [Troubleshooting](#troubleshooting)
+      * [Enabling debug mode](#enabling-debug-mode)
 
 ## Build Instructions
 
@@ -90,6 +94,8 @@ There are also some other environment variables that can be set to customize the
 * `OTRS_SMTP_PASSWORD` Password to authenticate with.
 
 Those environment variables is what you can configure by running the installer for a default install, plus other useful ones.
+
+As a convenience a premade service file `otrs.service` is included as part of the repository. To use it you will need to update `/opt/docker-otrs/docker-compose-prod.yml` to the path to your docker compose file, copy the service file from the repository to `/usr/lib/systemd/system/`, and run the command `systemctl daemon-reload`. You will then be able to use systemd to control your container.
 
 ### Docker Secrets
 In order to keep your repositories and images free from any sensitive information you can specify a path to you secrets file to deploy the container easier and safer within a docker swarm/kubernetes environment. You can store any key/value-pair from the list above exactly like the `.env` file.
@@ -182,7 +188,7 @@ You can control the backup behavior with the following variables:
   * `OTRS_BACKUP_TIME`: Sets the backup excecution time, in _cron_ format. If set to _disable_ automated backups will be disabled.
   * `OTRS_BACKUP_TYPE`: Sets the type of backup, it receives the same values as the [OTRS backup script](http://doc.otrs.com/doc/manual/admin/6.0/en/html/backup-and-restore.html):
     * _fullbackup_: Saves the database and the whole OTRS home directory (except /var/tmp and cache directories). This is the default.
-    * _nofullbackup_: Saves the database and the whole OTRS home directory (except /var/tmp and cache directories).
+    * _nofullbackup_: Saves only the database, /Kernel/Config* and /var directories.
     * _dbonly_: Only the database will be saved.
   * `OTRS_BACKUP_COMPRESSION`: Sets the backup compression method to use, it receives the same values as the [OTRS backup script](http://doc.otrs.com/doc/manual/admin/6.0/en/html/backup-and-restore.html) (gzip|bzip2). The default is gzip.
   * `OTRS_BACKUP_ROTATION`: Sets the number of days to keep the backup files. The default is 30 days.
@@ -243,13 +249,20 @@ To do a major version upgrade, follow these steps:
 ```
 The upgrade procedure will pause the boot process for 10 seconds to give the user the chance to cancel the upgrade.
 
-The first thing done by the upgrade process is to do a backup of the current version before starting with the upgrade process. Then it will follow the official upgrade instructions (run db upgrade script and upgrade modules, software was updated when pulling the new image).
+The first thing done by the upgrade process is to do a backup of the current version before starting with the upgrade process. Then it will follow the official upgrade instructions (run db upgrade script and upgrade modules, software was updated when pulling the new image). You can use these variables to control the upgrade process:
+  * `OTRS_UPGRADE_BACKUP=yes|no` to control if a backup should be done before starting an upgrade (default: yes).
 
-#### Modules (Add-ons)
+#### Aditional SQL files
+Sometimes there are fixes needed to be done to the database when doing an upgrade. When the database upgrade script is executed it will do some inconsistencies checks and it will spit out the sql commands needed to be run to fix the database and continue with the  upgrade process. Map `/opt/otrs/db_upgrade` to a host directory and put the sql files in it, they will get loaded before the database upgrade script is run.
+
+#### XML Configuration Files
+Since OTRS 6 the location and XML schema of configuration files has changed. OTRS can try to migrate this configuration files and put them in the new location. For this set `OTRS_UPGRADE_XML_FILES=yes` (default value: `no`).
+
+#### Add-ons
 The upgrade process will upgrade official modules (FAQ, Survey, etc). If you have additional 3rd party modules you will need to manually update them in the _Package Manager_.
 
 #### Custom Skins & Configuration Files
-If you have custom skins or additional XML configuration files you will have to manually update them if needed.
+As mentioned before, the XML files of custom skins can be migrated to the new location and updated schema setting `OTRS_UPGRADE_XML_FILES=yes`.
 
 #### Troubleshooting ####
  - If after upgrade you can't login with any account, delete the cookies for your OTRS website and try again.

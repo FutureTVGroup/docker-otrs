@@ -42,8 +42,9 @@ function apply_docker_secrets() {
   if [ -f $OTRS_SECRETS_FILE ]; then
     . $OTRS_SECRETS_FILE
     return 0
+  else
+    print_warning "Secrets file $OTRS_SECRETS_FILE not found"
   fi
-  print_warning "Secrets file $OTRS_SECRETS_FILE not found"
 }
 
 #Default configuration values
@@ -67,6 +68,8 @@ OTRS_BACKUP_SCRIPT="/otrs_backup.sh"
 OTRS_UPGRADE_BACKUP="${OTRS_UPGRADE_BACKUP:-yes}"
 OTRS_ADDONS_PATH="${OTRS_ROOT}/addons/"
 INSTALLED_ADDONS_DIR="${OTRS_ADDONS_PATH}/installed"
+OTRS_UPGRADE_SQL_FILES="${OTRS_ROOT}/db_upgrade"
+OTRS_UPGRADE_XML_FILES="${OTRS_UPGRADE_XML_FILES:-no}"
 
 [ ! -z "${OTRS_SECRETS_FILE}" ] && apply_docker_secrets
 [ -z "${OTRS_INSTALL}" ] && OTRS_INSTALL="no"
@@ -107,7 +110,7 @@ function restore_backup() {
   #container
   check_host_mount_dir
   add_config_value "DatabaseUser" ${OTRS_DB_USER}
-  add_config_value "DatabasePw" ${OTRS_DB_PASSWORD}
+  add_config_value "DatabasePw" ${OTRS_DB_PASSWORD} true
   add_config_value "DatabaseHost" ${OTRS_DB_HOST}
   add_config_value "DatabasePort" ${OTRS_DB_PORT}
   add_config_value "Database" ${OTRS_DB_NAME}
@@ -189,14 +192,21 @@ check_version() {
 function add_config_value() {
   local key=${1}
   local value=${2}
+  local mask=${3:-false}
+
+  if [ "${mask}" == true ]; then
+    print_value="**********"
+  else
+    print_value=${value}
+  fi
 
   grep -qE \{\'\?${key}\'\?\} ${OTRS_CONFIG_FILE}
   if [ $? -eq 0 ]
   then
-    print_info "Updating configuration option \e[${OTRS_ASCII_COLOR_BLUE}m${key}\e[0m with value: \e[31m${value}\e[0m"
+    print_info "Updating configuration option \e[${OTRS_ASCII_COLOR_BLUE}m${key}\e[0m with value: \e[31m${print_value}\e[0m"
     sed  -i -r "s/($Self->\{*$key*\} *= *).*/\1\"${value}\";/" ${OTRS_CONFIG_FILE}
   else
-    print_info "Adding configuration option \e[${OTRS_ASCII_COLOR_BLUE}m${key}\e[0m with value: \e[31m${value}\e[0m"
+    print_info "Adding configuration option \e[${OTRS_ASCII_COLOR_BLUE}m${key}\e[0m with value: \e[31m${print_value}\e[0m"
     sed -i "/$Self->{Home} = '\/opt\/otrs';/a \
     \$Self->{'${key}'} = '${value}';" ${OTRS_CONFIG_FILE}
   fi
@@ -207,7 +217,7 @@ function add_config_value() {
 function setup_otrs_config() {
   #Set database configuration
   add_config_value "DatabaseUser" ${OTRS_DB_USER}
-  add_config_value "DatabasePw" ${OTRS_DB_PASSWORD}
+  add_config_value "DatabasePw" ${OTRS_DB_PASSWORD} true
   add_config_value "DatabaseHost" ${OTRS_DB_HOST}
   add_config_value "DatabasePort" ${OTRS_DB_PORT}
   add_config_value "Database" ${OTRS_DB_NAME}
@@ -221,7 +231,7 @@ function setup_otrs_config() {
   [ ! -z "${OTRS_SMTP_SERVER}" ] && add_config_value "SendmailModule::Host" "${OTRS_SMTP_SERVER}"
   [ ! -z "${OTRS_SMTP_PORT}" ] && add_config_value "SendmailModule::Port" "${OTRS_SMTP_PORT}"
   [ ! -z "${OTRS_SMTP_USERNAME}" ] && add_config_value "SendmailModule::AuthUser" "${OTRS_SMTP_USERNAME}"
-  [ ! -z "${OTRS_SMTP_PASSWORD}" ] && add_config_value "SendmailModule::AuthPassword" "${OTRS_SMTP_PASSWORD}"
+  [ ! -z "${OTRS_SMTP_PASSWORD}" ] && add_config_value "SendmailModule::AuthPassword" "${OTRS_SMTP_PASSWORD}" true
   add_config_value "SecureMode" "1"
   # Configure automatic backups
   setup_backup_cron
@@ -394,6 +404,52 @@ function start_all_services () {
   su -c "${OTRS_ROOT}/bin/Cron.sh start" -s /bin/bash otrs
 }
 
+function fix_database_upgrade() {
+  print_info "[*] Running database pre-upgrade scripts..." | tee -a ${upgrade_log}
+  $mysqlcmd -e "use ${OTRS_DB_NAME}"
+  if [ $? -eq 0  ]; then
+    sql_files="$(ls ${OTRS_UPGRADE_SQL_FILES/*.sql})"
+
+    #Get all sql files and load them into the database
+    if [[ "${sql_files}" != "" ]]; then
+      for i in ${sql_files}; do
+        print_info "Loading SQL file: ${i}"
+        $mysqlcmd otrs < ${OTRS_UPGRADE_SQL_FILES}/${i} | tee -a ${upgrade_log}
+        if [ $? -gt 0  ]; then
+          print_error "Cannot load sql file: ${OTRS_UPGRADE_SQL_FILES}/${i}" | tee -a ${upgrade_log} && exit 1
+        fi
+        print_info "Done"
+      done
+    else
+      print_info "No additional SQL files to load were found."
+    fi
+  else
+    print_error "Database does not exist!" && exit 1
+  fi
+}
+
+function upgrade_database() {
+  # Upgrade database
+  print_info "[*] Doing database migration..." | tee -a ${upgrade_log}
+  $mysqlcmd -e "use ${OTRS_DB_NAME}"
+  if [ $? -eq 0  ]; then
+    su -c "/opt/otrs//scripts/DBUpdate-to-6.pl" -s /bin/bash otrs | tee -a ${upgrade_log}
+    if [ $? -gt 0  ]; then
+      print_error "Cannot migrate database" | tee -a ${upgrade_log} && exit 1
+    fi
+    grep -q "Not possible to complete migration" ${upgrade_log}
+    if [ $? -eq 0 ]; then
+      print_error "[2] Cannot migrate database" | tee -a ${upgrade_log}
+      print_error "Please connect to the databse container and fix the issues\
+  listed in the previous error message and follow the provided instructions\
+  to fix them.\n\nWhen you have run the fixes restart the upgrade process.\n\n" | tee -a ${upgrade_log}
+  exit 1
+    fi
+  else
+    print_error "Database does not exist!" && exit 1
+  fi
+}
+
 function upgrade () {
   print_warning "\e[${OTRS_ASCII_COLOR_BLUE}m****************************************************************************\e[0m\n"
   print_warning "\t\t\t\t\e[${OTRS_ASCII_COLOR_RED}m OTRS MAJOR VERSION UPGRADE\e[0m\n"
@@ -425,30 +481,30 @@ function upgrade () {
     fi
   fi
 
-  # Upgrade database
-  print_info "[*] Doing database migration..." | tee -a ${upgrade_log}
-  $mysqlcmd -e "use ${OTRS_DB_NAME}"
-  if [ $? -eq 0  ]; then
-    su -c "/opt/otrs//scripts/DBUpdate-to-6.pl" -s /bin/bash otrs | tee -a ${upgrade_log}
-    if [ $? -gt 0  ]; then
-      print_error "[1] Cannot migrate database" | tee -a ${upgrade_log} && exit 1
-    fi
-    grep -q "Not possible to complete migration" ${upgrade_log}
-    if [ $? -eq 0 ]; then
-      print_error "[2] Cannot migrate database" | tee -a ${upgrade_log}
-      print_error "Please connect to the databse container and fix the issues\
-  listed in the previous error message and follow the provided instructions\
-  to fix them.\n\nWhen you have run the fixes restart the upgrade process.\n\n" | tee -a ${upgrade_log}
-  exit 1
-    fi
-  fi
-
   #Update installed packages
   print_info "[*] Updating installed packages..." | tee -a ${upgrade_log}
   su -c "${OTRS_ROOT}/bin/otrs.Console.pl Admin::Package::UpgradeAll" -s /bin/bash otrs &> ${upgrade_log}
   if [ $? -gt 0  ]; then
     print_warning "Cannot upgrade package: ${i}-${latest_version}"  | tee -a ${upgrade_log}
   fi
+
+  if [[ "${OTRS_UPGRADE_XML_FILES}" == "yes" ]]; then
+    # Upgrade XML config files
+    print_info "[*] Converting configuration files to new XML format ..." | tee -a ${upgrade_log}
+    su -c "${OTRS_ROOT}/bin/otrs.Console.pl Dev::Tools::Migrate::ConfigXMLStructure --source-directory ${OTRS_ROOT}/Kernel/Config/Files" -s /bin/bash otrs &> ${upgrade_log}
+    if [ $? -gt 0  ]; then
+      print_warning "Cannot convert configuration files"  | tee -a ${upgrade_log}
+    fi
+  fi
+
+  # Run any sql file to fix any issues before starting the update. For ex the
+  # sql commands that are asked to be run by the db upgrade script bellow,
+  # which are needed to be be executed before the upgrade to be able to complete
+  # the uupgrade.
+  fix_database_upgrade
+  
+  # Run db upgrade script
+  upgrade_database
 
   rm -fr ${tmp_dir}
   print_info "[*] Major version upgrade finished !!"  | tee -a ${upgrade_log}
